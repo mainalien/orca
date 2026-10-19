@@ -22,6 +22,21 @@ type WindowWakePtyBinding = IDisposable & {
 
 const DPR_RECOVERY_RETRY_FRAMES = 16
 
+function observeResolutionChanges(onChange: () => void): () => void {
+  if (typeof window.matchMedia !== 'function') {
+    return () => {}
+  }
+  let query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+  const onResolutionChange = (): void => {
+    query.removeEventListener('change', onResolutionChange)
+    query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+    query.addEventListener('change', onResolutionChange)
+    onChange()
+  }
+  query.addEventListener('change', onResolutionChange)
+  return () => query.removeEventListener('change', onResolutionChange)
+}
+
 export function useTerminalWindowWakeRecovery({
   isVisible,
   isChatViewMode,
@@ -167,9 +182,8 @@ export function useTerminalWindowWakeRecovery({
       dprRecoveryFrameId = requestAnimationFrame(retry)
     }
     const onWindowResize = (): void => {
-      // Why: Chromium emits window resize on devicePixelRatio changes even when
-      // the CSS box is unchanged (monitor move / undock). xterm's own observer
-      // misses that while the canvas had no box (laptop lid closed).
+      // Resize is one scale-change signal; the resolution observer covers DPR
+      // changes without a CSS resize or while xterm's canvas had no box.
       const devicePixelRatio = window.devicePixelRatio
       if (devicePixelRatio === observedDevicePixelRatio) {
         return
@@ -181,6 +195,8 @@ export function useTerminalWindowWakeRecovery({
         scheduleDprRecovery()
       }
     }
+    // CDP/display scale changes can update resolution without a window resize.
+    const stopObservingResolution = observeResolutionChanges(onWindowResize)
     window.addEventListener('focus', onFocus)
     window.addEventListener('resize', onWindowResize)
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -197,6 +213,7 @@ export function useTerminalWindowWakeRecovery({
     return () => {
       cancelScheduledWakeRecovery()
       cancelScheduledDprRecovery()
+      stopObservingResolution()
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('resize', onWindowResize)
       if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {

@@ -262,6 +262,65 @@ describe('useTerminalWindowWakeRecovery', () => {
     expect(repairPaneWebglCanvasDprMock).toHaveBeenCalledTimes(1)
   })
 
+  it('repairs resolution changes without resize and rearms the current resolution', () => {
+    const queries: {
+      media: string
+      listeners: Set<() => void>
+      addEventListener: ReturnType<typeof vi.fn>
+      removeEventListener: ReturnType<typeof vi.fn>
+    }[] = []
+    const matchMedia = vi.fn((media: string) => {
+      const listeners = new Set<() => void>()
+      const query = {
+        media,
+        listeners,
+        addEventListener: vi.fn((_event: string, listener: () => void) => listeners.add(listener)),
+        removeEventListener: vi.fn((_event: string, listener: () => void) =>
+          listeners.delete(listener)
+        )
+      }
+      queries.push(query)
+      return query
+    })
+    vi.stubGlobal('matchMedia', matchMedia)
+    vi.stubGlobal('devicePixelRatio', 2)
+    const pane = { id: 1, terminal: {} }
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the hook reads only getPanes from this test double.
+    const wakeManager = { getPanes: () => [pane] } as unknown as PaneManager
+    repairPaneWebglCanvasDprMock.mockReturnValue('repaired')
+    const { unmount } = renderWakeRecoveryHook(true, false, wakeManager)
+    expect(queries[0]?.media).toBe('(resolution: 2dppx)')
+
+    vi.stubGlobal('devicePixelRatio', 1)
+    for (const listener of queries[0]!.listeners) {
+      listener()
+    }
+    expect(repairPaneWebglCanvasDprMock).toHaveBeenCalledWith(pane)
+    expect(presentPaneViewportMock).toHaveBeenCalledWith(pane)
+    expect(recoverVisibleTerminalWindowWakeMock).not.toHaveBeenCalled()
+    expect(queries[0]?.listeners.size).toBe(0)
+    expect(queries[1]?.media).toBe('(resolution: 1dppx)')
+
+    vi.stubGlobal('devicePixelRatio', 3)
+    for (const listener of queries[1]!.listeners) {
+      listener()
+    }
+    expect(repairPaneWebglCanvasDprMock).toHaveBeenCalledTimes(2)
+    expect(queries[1]?.listeners.size).toBe(0)
+    expect(queries[2]?.media).toBe('(resolution: 3dppx)')
+
+    unmount()
+    expect(queries[2]?.listeners.size).toBe(0)
+    expect(queries.every((query) => query.removeEventListener.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('does not observe resolution while the terminal surface is hidden', () => {
+    const matchMedia = vi.fn()
+    vi.stubGlobal('matchMedia', matchMedia)
+    renderWakeRecoveryHook(false)
+    expect(matchMedia).not.toHaveBeenCalled()
+  })
+
   it('retains a dpr transition until the visible manager is available', () => {
     const pane = { id: 1, terminal: {} }
     const managerRef: { current: PaneManager | null } = { current: null }
